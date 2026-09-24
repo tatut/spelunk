@@ -215,7 +215,8 @@ int main(int argc, char **argv) {
   printf("  ---------------+--------------+--------------+--------------+-------\n");
   qsort(arr, count, sizeof(ext_info), cmp);
   size_t total = 0, files = 0;
-  for (int i = 0; i < count; i++) {
+
+  for (int i = (count > top_n ? count - top_n : 0); i < count; i++) {
     //printf(" printing %d / %zu\n", i, count);
     ext_info t = arr[i];
     printf("%16s | ",t.ext[0] == 0 ? "(none)" : t.ext);
