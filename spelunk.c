@@ -3,6 +3,8 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <string.h>
+#include <time.h>
+#include <stdbool.h>
 
 typedef struct ext_info {
   char ext[24];
@@ -65,18 +67,6 @@ find:
   }
 }
 
-void dump(trie *at, char *prefix) {
-  char suffix[24];
-  for (int i = 0; i < at->nodes_size; i++) {
-    trie t = at->nodes[i];
-    snprintf(suffix, 24, "%s%c", prefix, t.ch);
-    if(t.files) {
-
-    }
-    dump(&t, suffix);
-  }
-}
-
 void to_array(trie *at, char *prefix, ext_info **arr, size_t *count) {
   char suffix[24];
   snprintf(suffix, 24, "%s%c", prefix, at->ch);
@@ -95,11 +85,19 @@ void to_array(trie *at, char *prefix, ext_info **arr, size_t *count) {
   }
 }
 
+const char *spinner[] = {"▁","▃","▄","▅","▆","▇","█","▇","▆","▅","▄","▃"};
+
 
 void recurse(trie *root, const char *path) {
   DIR *dir;
   struct dirent *entry;
   char buf[1024];
+  clock_t now = clock();
+
+  static int count = 0;
+  count += 1;
+
+  printf("\e[0K%s (%d) Spelunking in: %s\r", spinner[(now/(CLOCKS_PER_SEC/15))%12], count, path);
 
   dir = opendir(path);
   while ((entry = readdir(dir))) {
@@ -124,28 +122,84 @@ void recurse(trie *root, const char *path) {
   closedir(dir);
 }
 
-int cmp_total_size(const void *aptr, const void *bptr) {
-  ext_info *a = (ext_info *)aptr;
-  ext_info *b = (ext_info *)bptr;
-  if (a->size_total < b->size_total)
-    return -1;
-  else if (a->size_total > b->size_total)
-    return 1;
-  else
-    return 0;
-}
+#define COMPARE_FN(field)                                                      \
+  int cmp_##field(const void *aptr, const void *bptr) {                        \
+    ext_info *a = (ext_info *)aptr;                                            \
+    ext_info *b = (ext_info *)bptr;                                            \
+    if (a->field < b->field)                                                   \
+      return -1;                                                               \
+    else if (a->field > b->field)                                              \
+      return 1;                                                                \
+    else                                                                       \
+      return 0;                                                                \
+  }
+
+COMPARE_FN(size_total);
+COMPARE_FN(files);
+COMPARE_FN(size_min);
+COMPARE_FN(size_max);
+
+typedef int (*Comparator)(const void*, const void*);
 
 void format_size(size_t sz) {
   if (sz >= (1 << 20)) {
     printf("%11.1fM", sz/(float)(1<<20));
   } else if (sz >= (1 << 10)) {
     printf("%11.1fK", sz/(float)(1<<10));
-  }else {
+  } else {
     printf("%11zuB", sz);
   }
 }
 
+bool parse_args(int argc, char **argv, long *top_n, Comparator *cmp) {
+  char **arg = argv;
+  argc--;
+  arg++; // skip executable name
+
+  while (argc) {
+    if (strcmp(arg[0], "-s") == 0) {
+      if (argc < 2) goto parameter_required;
+      if (strcmp(arg[1], "files") == 0) {
+        *cmp = &cmp_files;
+      } else if (strcmp(arg[1], "max") == 0) {
+        *cmp = &cmp_size_max;
+      } else if (strcmp(arg[1], "min") == 0) {
+        *cmp = &cmp_size_min;
+      } else if (strcmp(arg[1], "total") == 0) {
+        *cmp = &cmp_size_total;
+      } else {
+        goto unknown_parameter;
+      }
+      argc -= 2;
+      arg += 2;
+    } else if (strcmp(arg[0], "-n") == 0) {
+      if (argc < 2) goto parameter_required;
+      *top_n = atol(arg[1]);
+      argc -= 2;
+      arg += 2;
+    } else {
+      goto unknown_flag;
+    }
+
+  }
+  return true;
+unknown_flag:
+  fprintf(stderr, "unknown flag: %s\n", arg[0]);
+  return false;
+parameter_required:
+  fprintf(stderr, "%s: parameter required\n", arg[0]);
+  return false;
+unknown_parameter:
+  fprintf(stderr, "%s: unrecognized value %s\n", arg[0], arg[1]);
+  return false;
+}
+
 int main(int argc, char **argv) {
+  long top_n = 99999999;
+  Comparator cmp = &cmp_size_total;
+  if (!parse_args(argc, argv, &top_n, &cmp))
+    return 1;
+
   trie root = {0};
   recurse(&root, ".");
 
@@ -153,11 +207,13 @@ int main(int argc, char **argv) {
       malloc(sizeof(ext_info) * 1024); // should be enough for everybody!
   size_t count = 0;
 
+
+
   ext_info *to = arr;
   to_array(&root, "", &to, &count);
   printf("  File extension |     min size |     max size |     tot size |  files\n");
   printf("  ---------------+--------------+--------------+--------------+-------\n");
-  qsort(arr, count, sizeof(ext_info), cmp_total_size);
+  qsort(arr, count, sizeof(ext_info), cmp);
   size_t total = 0, files = 0;
   for (int i = 0; i < count; i++) {
     //printf(" printing %d / %zu\n", i, count);
